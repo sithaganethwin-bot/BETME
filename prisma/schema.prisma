@@ -1,0 +1,360 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(cuid())
+  email         String?         @unique
+  phone         String?         @unique
+  name          String
+  avatarUrl     String?
+  role          String          @default("BUYER") // BUYER, SELLER, VERIFIED_SELLER, ADMIN, SUPER_ADMIN
+  isEmailVerified Boolean       @default(false)
+  isPhoneVerified Boolean       @default(false)
+  buyerScore    Int             @default(100) // Reputation score (0-100)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  identities    UserIdentity[]
+  profile       UserProfile?
+  sellerProfile SellerProfile?
+  addresses     Address[]
+  bids          Bid[]
+  autoBidRules  AutoBidRule[]
+  watchlists    Watchlist[]
+  reminders     AuctionReminder[]
+  orders        Order[]
+  reviewsGiven  Review[]        @relation("ReviewsGiven")
+  disputes      Dispute[]       @relation("DisputesRaised")
+  auditLogs     AuditLog[]
+  aiConversations AiConversation[]
+}
+
+model UserIdentity {
+  id          String   @id @default(cuid())
+  userId      String
+  provider    String   // GOOGLE, APPLE, EMAIL, PHONE
+  providerId  String   // e.g. Google sub claim or phone number
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerId])
+}
+
+model UserProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  bio         String?
+  district    String?  // Sri Lankan district: Colombo, Kandy, Gampaha, etc.
+  province    String?  // Western, Central, etc.
+  nicNumber   String?  // National Identity Card
+  preferredLanguage String @default("EN") // EN, SI, TA
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String   @default("Home") // Home, Work
+  street      String
+  city        String
+  district    String   // Colombo, Gampaha, Kandy, etc.
+  province    String
+  postalCode  String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SellerProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  storeName      String
+  storeSlug      String   @unique
+  description    String?
+  logoUrl        String?
+  bannerUrl      String?
+  verificationLevel String @default("REGISTERED") // REGISTERED, EMAIL_VERIFIED, PHONE_VERIFIED, UNDER_REVIEW, VERIFIED_SELLER
+  isVerified     Boolean  @default(false)
+  reputationScore Float   @default(5.0)
+  totalSales     Int      @default(0)
+  successfulDeliveries Int @default(0)
+  disputeRate    Float    @default(0.0)
+  totalCommissionPaid Float @default(0)
+  totalNetEarnings Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verifications  SellerVerification[]
+  products       Product[]
+  auctions       Auction[]
+  reviews        Review[] @relation("SellerReviews")
+}
+
+model SellerVerification {
+  id             String   @id @default(cuid())
+  sellerProfileId String
+  documentType   String   // NIC, PASSPORT, BUSINESS_REGISTRATION
+  documentNumber String
+  documentUrl    String?
+  status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  adminNotes     String?
+  reviewedAt     DateTime?
+  createdAt      DateTime @default(now())
+
+  sellerProfile  SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  icon        String?
+  description String?
+  isRestricted Boolean  @default(false)
+  products    Product[]
+  auctions    Auction[]
+}
+
+model Product {
+  id          String         @id @default(cuid())
+  sellerId    String
+  categoryId  String
+  title       String
+  slug        String         @unique
+  description String
+  brand       String?
+  model       String?
+  condition   String         @default("USED_EXCELLENT") // BRAND_NEW, LIKE_NEW, USED_EXCELLENT, USED_GOOD, FOR_PARTS
+  attributes  String?        // JSON string of specs (RAM, Storage, Shutter count, etc.)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  seller      SellerProfile  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  category    Category       @relation(fields: [categoryId], references: [id])
+  images      ProductImage[]
+  auctions    Auction[]
+}
+
+model ProductImage {
+  id          String   @id @default(cuid())
+  productId   String
+  url         String
+  isPrimary   Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model Auction {
+  id              String         @id @default(cuid())
+  sellerId        String
+  productId       String
+  categoryId      String
+  title           String
+  slug            String         @unique
+  auctionType     String         @default("STANDARD") // STANDARD, RESERVE, BUY_NOW, SCHEDULED
+  status          String         @default("LIVE") // DRAFT, SCHEDULED, LIVE, ENDING, ENDED, AWAITING_PAYMENT, PAID, SHIPPED, DELIVERED, COMPLETED, CANCELLED
+  startingPrice   Float
+  currentPrice    Float
+  reservePrice    Float?         // If not met, auction won't auto-sell
+  buyNowPrice     Float?         // Instant buy price
+  bidIncrement    Float          @default(500)
+  startsAt        DateTime       @default(now())
+  endsAt          DateTime
+  antiSnipingMinutes Int         @default(2) // Extended by N minutes if bid in last N minutes
+  extensionCount  Int            @default(0)
+  totalBids       Int            @default(0)
+  viewCount       Int            @default(0)
+  locationDistrict String        @default("Colombo") // Location of item
+  shippingDetails String?        // "Courier Islandwide - Rs. 500 or Local Pickup"
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  seller          SellerProfile  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category        Category       @relation(fields: [categoryId], references: [id])
+  bids            Bid[]
+  autoBidRules    AutoBidRule[]
+  watchlists      Watchlist[]
+  reminders       AuctionReminder[]
+  order           Order?
+}
+
+model Bid {
+  id          String   @id @default(cuid())
+  auctionId   String
+  bidderId    String
+  amount      Float
+  isAutoBid   Boolean  @default(false)
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  auction     Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidder      User     @relation(fields: [bidderId], references: [id], onDelete: Cascade)
+}
+
+model AutoBidRule {
+  id          String   @id @default(cuid())
+  auctionId   String
+  userId      String
+  maxAmount   Float
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  auction     Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([auctionId, userId])
+}
+
+model Watchlist {
+  id          String   @id @default(cuid())
+  userId      String
+  auctionId   String
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction     Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, auctionId])
+}
+
+model AuctionReminder {
+  id            String   @id @default(cuid())
+  userId        String
+  auctionId     String
+  minutesBefore Int      @default(5) // 5 or 2
+  isTriggered   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auction       Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, auctionId, minutesBefore])
+}
+
+model Order {
+  id          String     @id @default(cuid())
+  auctionId   String     @unique
+  buyerId     String
+  totalAmount Float
+  grossAmount Float      @default(0)
+  commissionRate Float   @default(0.05)
+  commissionAmount Float @default(0)
+  netSellerAmount Float  @default(0)
+  payoutStatus String    @default("PENDING") // PENDING, PROCESSING, RELEASED
+  status      String     @default("PENDING_PAYMENT") // PENDING_PAYMENT, PAID, PROCESSING, SHIPPED, DELIVERED, COMPLETED, CANCELLED, REFUNDED
+  shippingAddress String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  auction     Auction    @relation(fields: [auctionId], references: [id])
+  buyer       User       @relation(fields: [buyerId], references: [id])
+  payment     Payment?
+  shipment    Shipment?
+  disputes    Dispute[]
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  orderId         String   @unique
+  amount          Float
+  currency        String   @default("LKR")
+  gateway         String   @default("PAYHERE") // PAYHERE, LANKAPAY, COD
+  gatewayPaymentId String?
+  signature       String?
+  status          String   @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model Shipment {
+  id              String   @id @default(cuid())
+  orderId         String   @unique
+  trackingNumber  String
+  courier         String   @default("Koombiyo Delivery") // Koombiyo, PromptX, Citypak, Domex, Pronto
+  status          String   @default("PROCESSING") // PROCESSING, SHIPPED, IN_TRANSIT, DELIVERED
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model Review {
+  id          String   @id @default(cuid())
+  sellerId    String
+  reviewerId  String
+  rating      Int      // 1 - 5 stars
+  comment     String
+  createdAt   DateTime @default(now())
+
+  seller      SellerProfile @relation("SellerReviews", fields: [sellerId], references: [id], onDelete: Cascade)
+  reviewer    User          @relation("ReviewsGiven", fields: [reviewerId], references: [id], onDelete: Cascade)
+}
+
+model Dispute {
+  id          String   @id @default(cuid())
+  orderId     String
+  raisedById  String
+  reason      String
+  description String
+  status      String   @default("OPEN") // OPEN, UNDER_REVIEW, RESOLVED_REFUND, RESOLVED_SELLER, CLOSED
+  resolution  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  raisedBy    User     @relation("DisputesRaised", fields: [raisedById], references: [id])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String   // BID_PLACED, AUCTION_CREATED, AUCTION_EXTENDED, PAYMENT_VERIFIED, SELLER_VERIFIED, FRAUD_FLAGGED
+  entity      String   // Auction, Bid, Payment, User
+  entityId    String
+  details     String?  // JSON string
+  ipAddress   String?  @default("127.0.0.1")
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id])
+}
+
+model AiConversation {
+  id          String      @id @default(cuid())
+  userId      String?
+  auctionId   String?
+  assistantType String    @default("BIDMATE") // BIDMATE, SELLER_COPILOT, SUPPORT
+  createdAt   DateTime    @default(now())
+
+  user        User?       @relation(fields: [userId], references: [id])
+  messages    AiMessage[]
+}
+
+model AiMessage {
+  id             String         @id @default(cuid())
+  conversationId String
+  role           String         // user, assistant, system
+  content        String
+  createdAt      DateTime       @default(now())
+
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+}
